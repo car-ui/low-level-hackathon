@@ -1,0 +1,26 @@
+{
+  "allocator_sha256": "a440d356f1dcc70dded4f05574c4cc5e719d8e94f4231ed38236fade5df78c35",
+  "host": "development Linux, GCC 14.2.0",
+  "checks": [
+    {
+      "command": "make check extended stress demo",
+      "exit_code": 0,
+      "log_sha256": "6fb76f64527d6c5e29b75e66a1a6546daadef66d5890ecaa43656d7bc5cc94b4"
+    },
+    {
+      "command": "ASAN_OPTIONS=detect_leaks=0 make sanitize",
+      "exit_code": 0,
+      "log_sha256": "8c534bde669820e0d6fec00a57d2c92973812b2ab909ed20afe21b750357d8c6"
+    },
+    {
+      "command": "make thread-sanitize",
+      "exit_code": 0,
+      "log_sha256": "c7039c7832c665d593a5824d60da11d51679bd3048fdb54b94f12de060629a52"
+    },
+    {
+      "command": "python3 scripts/soak.py",
+      "exit_code": 0,
+      "log_sha256": "2d26103be383f5b801924645148e9b5cd8ce8a3b04aae521ec92f9e80b4abaae"
+    }
+  ]
+}

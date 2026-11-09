@@ -44,7 +44,14 @@ check-symbols: $(ALLOC_OBJ)
 		echo "Allocator symbol check passed."; \
 	fi
 
-check: check-symbols test
+check: check-symbols test size-classes
+
+$(BUILD_DIR)/test_size_classes: tests/test_size_classes.c src/allocator.c include/libmemctl.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNINGS) $(NO_ALLOC_BUILTINS) $< $(LDLIBS) -o $@
+
+.PHONY: size-classes
+size-classes: $(BUILD_DIR)/test_size_classes
+	./$(BUILD_DIR)/test_size_classes
 
 clean:
 	rm -rf $(BUILD_DIR)

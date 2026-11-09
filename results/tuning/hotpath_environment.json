@@ -1,0 +1,8 @@
+{
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "compiler": "cc (Debian 14.2.0-19) 14.2.0",
+  "baseline_commit": "072521dea50102127ad3f6f6eed347bdc33fd40d",
+  "allocator_sha256": "a440d356f1dcc70dded4f05574c4cc5e719d8e94f4231ed38236fade5df78c35",
+  "affinity": "not pinned",
+  "comparison": "same compiler, flags, traces and host; sequential benchmark processes"
+}

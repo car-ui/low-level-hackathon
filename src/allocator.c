@@ -115,13 +115,19 @@ static int round_mapping(size_t bytes, size_t *rounded)
 
 static unsigned int size_class(size_t size)
 {
-    unsigned int left = 0, right = CLASS_COUNT;
-    while (left < right) {
-        const unsigned int middle = left + (right - left) / 2U;
-        if (capacities[middle] < size) left = middle + 1U;
-        else right = middle;
-    }
-    return left;
+    size_t reduced;
+    unsigned int shift = 5U;
+    if (size > 32768U) return CLASS_COUNT;
+    /* The caller normalizes zero to one. The first eight classes are 16
+     * bytes apart; subsequent octaves each contain four equally spaced classes.
+     * Subtract one so exact boundaries remain in the lower class. */
+    if (size <= 128U) return (unsigned int)((size - 1U) >> 4U);
+    reduced = size - 1U;
+    if (reduced >= 2048U) { reduced >>= 4U; shift += 4U; }
+    if (reduced >= 512U) { reduced >>= 2U; shift += 2U; }
+    if (reduced >= 256U) ++shift;
+    return 8U + 4U * (shift - 5U) +
+           (unsigned int)(((size - 1U) >> shift) - 4U);
 }
 
 /* Caller holds the owning shard mutex. Full slabs are not in this list. */
@@ -207,7 +213,10 @@ void *my_malloc(size_t size)
     slab *region;
     block_header *header;
     int lock_result;
-    if (!ready()) return NULL;
+    /* A shard index is assigned only after successful pthread_once. This
+     * thread-local state therefore proves initialization for subsequent calls;
+     * new threads still synchronize through pthread_once before reading it. */
+    if (local_shard == UINT_MAX && !ready()) return NULL;
     index = size_class(payload);
     if (index == CLASS_COUNT) return large_allocate(payload);
     if (local_shard == UINT_MAX) {

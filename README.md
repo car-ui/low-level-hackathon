@@ -13,7 +13,7 @@ make clean
 make check extended stress demo
 ```
 
-`make check` runs the unchanged organizer public test suite and checks the allocator object for forbidden heap symbols. `make extended` adds boundary, overflow, mapping-failure, cross-thread and reclamation cases. `make stress` adds 40-thread cross-owner handoff/realloc, sparse objects pinning slabs, and 128 large-object churn/failure cycles. `make demo` runs a short functional demonstration. To link a client: `cc -Iinclude client.c build/libmemctl.a -pthread -o client`.
+`make check` runs the unchanged organizer public test suite checks the allocator object for forbidden heap symbols, and verifies exact size-class selection across every size from 1 to 65,537 plus SIZE_MAX boundaries. `make extended` adds boundary, overflow, mapping-failure, cross-thread and reclamation cases. `make stress` adds 40-thread cross-owner handoff/realloc, sparse objects pinning slabs, and 128 large-object churn/failure cycles. `make demo` runs a short functional demonstration. To link a client: `cc -Iinclude client.c build/libmemctl.a -pthread -o client`.
 
 The following checks also passed on the development Linux host; its tracing setup required leak detection to be disabled for ASan/UBSan:
 
@@ -23,7 +23,7 @@ make thread-sanitize
 python3 scripts/soak.py
 ```
 
-T.kartheek independently passed the public and extended suites under ASan/UBSan and ThreadSanitizer, plus the three-seed soak, in WSL Ubuntu before the new stress target was added. See [WSL validation](docs/WSL_VALIDATION.md). Leak detection on an unrestricted host and hidden judge tests are not confirmed.
+T.kartheek independently passed the public, extended and stress suites under ASan/UBSan (with `detect_leaks=1`) and ThreadSanitizer in WSL Ubuntu, and previously passed the three-seed soak. Those runs predate the arithmetic lookup improvement. See [WSL validation](docs/WSL_VALIDATION.md) for exact scope and custom-allocator leak-detection limitations. Hidden judge tests are not available.
 
 ## Design
 
@@ -42,6 +42,8 @@ python3 scripts/diagnose.py
 The original throughput study used 180 fresh processes: the candidate, organizer baseline and libc across 1/2/4/8 threads and three workloads, five repeats each. The space study used 30 fresh processes. Longer diagnostics added 180 shuffled runs at 1/8/32 threads with tiny, mixed, realloc, calloc-heavy and large-object traces. The candidate outperformed the deliberately slow mmap-per-object baseline on tested traces, but libc generally performed better. In the longer eight-thread large-object trace, the candidate reached about 0.09 million operations per second versus about 2.25 million for libc; immediate `munmap` trades throughput for reclamation.
 
 The fixed 2 MiB empty-cache bound made 16/32-shard configurations much slower on mixed workloads. Best-fit empty-slab reuse and four/two-slot slab trials also lacked a balanced gain. The production defaults remain eight shards and eight minimum slots. See [performance tuning](docs/PERFORMANCE_TUNING.md) and the raw CSV/JSONL files under `results/`. These are shared-host diagnostics, not an official ranking. Benchmark scripts overwrite their corresponding output files.
+
+The latest hot-path changes replace binary-search class selection with arithmetic and skip redundant initialization checks after a thread has an assigned shard. In the 225-run comparison, single-thread tiny allocation improved 16.9% and 32-thread realloc improved 12.3%; longer paired checks still showed 4.5% and 2.8% regressions for eight-thread tiny/realloc. This is a workload-dependent tradeoff, not a universal speedup. See [full hot-path results](docs/HOTPATH_OPTIMIZATION.md) for all 431 benchmark runs and final-source validation.
 
 ## Submission status
 
