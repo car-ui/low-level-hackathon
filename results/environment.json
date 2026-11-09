@@ -1,0 +1,9 @@
+{
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "cpu": "AMD EPYC 9V45 96-Core Processor",
+  "compiler": "cc (Debian 14.2.0-19) 14.2.0",
+  "flags": "-O2 -g -std=c11 and official warnings",
+  "seed": 20261109,
+  "date_ist": "2026-11-09",
+  "limitations": "Shared host; no CPU affinity/frequency control; five runs only. No official ranking harness."
+}

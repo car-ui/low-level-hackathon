@@ -1,0 +1,17 @@
+{
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "affinity_cpus": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "compiler": "cc (Debian 14.2.0-19) 14.2.0",
+  "seed": 20261109,
+  "notes": "3 shuffled fresh runs per case on a shared host, without fixed CPU affinity. 8/16/32 shard candidates share a total 2 MiB empty-slab budget. The large trace has fewer steps to control runtime."
+}

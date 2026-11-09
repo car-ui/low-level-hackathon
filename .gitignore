@@ -1,0 +1,10 @@
+build/
+build-sanitize/
+build-tsan/
+__pycache__/
+*.pyc
+*.o
+*.a
+results/*.log
+results/**/*.log
+docs/*.pdf
