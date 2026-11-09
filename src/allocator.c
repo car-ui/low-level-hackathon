@@ -17,6 +17,7 @@
 #define SHARDS 8U
 #endif
 #define CLASS_COUNT 40U
+#define MAX_SLAB_PAYLOAD (32U * 1024U)
 #ifndef SLAB_TARGET
 #define SLAB_TARGET (16U * 1024U)
 #endif
@@ -62,7 +63,7 @@ static const size_t capacities[CLASS_COUNT] = {
     160, 192, 224, 256, 320, 384, 448, 512,
     640, 768, 896, 1024, 1280, 1536, 1792, 2048,
     2560, 3072, 3584, 4096, 5120, 6144, 7168, 8192,
-    10240, 12288, 14336, 16384, 20480, 24576, 28672, 32768
+    10240, 12288, 14336, 16384, 20480, 24576, 28672, MAX_SLAB_PAYLOAD
 };
 static shard shards[SHARDS];
 static pthread_once_t init_once = PTHREAD_ONCE_INIT;
@@ -117,7 +118,7 @@ static unsigned int size_class(size_t size)
 {
     size_t reduced;
     unsigned int shift = 5U;
-    if (size > 32768U) return CLASS_COUNT;
+    if (size > MAX_SLAB_PAYLOAD) return CLASS_COUNT;
     /* The caller normalizes zero to one. The first eight classes are 16
      * bytes apart; subsequent octaves each contain four equally spaced classes.
      * Subtract one so exact boundaries remain in the lower class. */
@@ -323,6 +324,10 @@ void *my_calloc(size_t nmemb, size_t size)
     }
     total = nmemb * size;
     ptr = my_malloc(total);
-    if (ptr != NULL && total != 0U) (void)memset(ptr, 0, total);
+    /* Large requests receive fresh anonymous mappings, already zero-filled.
+     * Slab payloads may contain bytes from previous users. */
+    if (ptr != NULL && total != 0U && total <= MAX_SLAB_PAYLOAD) {
+        (void)memset(ptr, 0, total);
+    }
     return ptr;
 }
