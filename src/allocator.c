@@ -34,9 +34,13 @@ struct shard;
 typedef struct block_header {
     _Alignas(max_align_t) struct slab *owner;
     size_t requested;
-    size_t capacity;
-    size_t mapping_bytes; /* only used by dedicated large mappings */
 } block_header;
+
+/* The common header immediately precedes both kinds of payload. */
+typedef struct large_header {
+    size_t mapping_bytes;
+    block_header block;
+} large_header;
 
 typedef struct slab {
     _Alignas(max_align_t) struct slab *next;
@@ -73,6 +77,8 @@ static size_t page_bytes;
 static int initialization_error;
 
 _Static_assert(sizeof(block_header) % ALIGNMENT == 0, "header alignment");
+_Static_assert(offsetof(large_header, block) + sizeof(block_header) ==
+               sizeof(large_header), "common header must end at large payload");
 _Static_assert(sizeof(slab) % ALIGNMENT == 0, "slab alignment");
 _Static_assert(16 % ALIGNMENT == 0, "size classes require max_align_t <= 16 dividing 16");
 
@@ -190,19 +196,18 @@ static slab *new_slab(shard *owner, unsigned int index)
 static void *large_allocate(size_t requested)
 {
     size_t bytes;
-    block_header *header;
-    if (requested > SIZE_MAX - sizeof(block_header)) {
+    large_header *header;
+    if (requested > SIZE_MAX - sizeof(large_header)) {
         errno = ENOMEM;
         return NULL;
     }
-    if (!round_mapping(sizeof(block_header) + requested, &bytes)) return NULL;
+    if (!round_mapping(sizeof(large_header) + requested, &bytes)) return NULL;
     header = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (header == MAP_FAILED) return NULL;
-    header->owner = NULL;
-    header->requested = requested;
-    header->capacity = bytes - sizeof(block_header);
     header->mapping_bytes = bytes;
+    header->block.owner = NULL;
+    header->block.requested = requested;
     return header + 1;
 }
 
@@ -247,8 +252,6 @@ void *my_malloc(size_t size)
                                   region->next_unused * region->stride);
         ++region->next_unused;
         header->owner = region;
-        header->capacity = capacities[index];
-        header->mapping_bytes = 0;
     }
     header->requested = size;
     ++region->live;
@@ -267,7 +270,8 @@ void my_free(void *ptr)
     header = (block_header *)ptr - 1;
     region = header->owner;
     if (region == NULL) {
-        (void)munmap(header, header->mapping_bytes);
+        large_header *mapping = (large_header *)ptr - 1;
+        (void)munmap(mapping, mapping->mapping_bytes);
         errno = saved_errno;
         return;
     }
@@ -296,13 +300,19 @@ void *my_realloc(void *ptr, size_t size)
 {
     block_header *header;
     void *replacement;
-    size_t copy_bytes;
+    size_t copy_bytes, capacity;
     if (ptr == NULL) return my_malloc(size);
     if (size == 0U) { my_free(ptr); return NULL; }
     header = (block_header *)ptr - 1;
+    if (header->owner != NULL) {
+        capacity = header->owner->stride - sizeof(block_header);
+    } else {
+        const large_header *mapping = (const large_header *)ptr - 1;
+        capacity = mapping->mapping_bytes - sizeof(large_header);
+    }
     /* Keep moderate resizes in place. Move substantial shrinks to avoid
      * pinning a large region for a tiny object. Object ownership is caller-synchronized. */
-    if (size <= header->capacity && size > header->capacity / 2U) {
+    if (size <= capacity && size > capacity / 2U) {
         header->requested = size;
         return ptr;
     }

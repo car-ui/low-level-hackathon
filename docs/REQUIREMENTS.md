@@ -10,7 +10,7 @@ Source: docs/official_problem.md, SYSPROG10. This matrix establishes tested beha
 | Distinct freeable zero allocations | Zero requests internally use smallest class | 256 simultaneous zero-size allocations, pairwise uniqueness |
 | free(NULL) | Immediate return | Official tests and demo |
 | Checked size arithmetic | Header/page-round checks; calloc division check | Public overflow checks, near-SIZE_MAX sweep |
-| calloc zeroing | memset of all requested bytes | Public zeroing suite |
+| calloc zeroing | Clear slab payloads explicitly; use fresh zero-filled anonymous mappings for large requests | Public zeroing suite and large-object stress |
 | realloc NULL/zero behavior | Delegation to malloc; free-and-NULL for non-NULL pointer resized to zero | Public realloc suite |
 | Prefix preservation and failure retention | Allocate-copy-free only after success | Public suite and forced mmap failure test |
 | Metadata thread safety | Eight shard locks, stable ownership, synchronized initialization | 8-thread public suite; 16-thread transfer; 40-thread stress; TSan |
