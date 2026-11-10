@@ -13,7 +13,7 @@ make clean
 make check extended stress demo
 ```
 
-`make check` runs the unchanged organizer public test suite checks the allocator object for forbidden heap symbols, and verifies exact size-class selection across every size from 1 to 65,537 plus SIZE_MAX boundaries. `make extended` adds boundary, overflow, mapping-failure, cross-thread and reclamation cases. `make stress` adds 40-thread cross-owner handoff/realloc, sparse objects pinning slabs, and 128 large-object churn/failure cycles. `make demo` runs a short functional demonstration. To link a client: `cc -Iinclude client.c build/libmemctl.a -pthread -o client`.
+`make check` runs the unchanged organizer public test suite checks the allocator object for forbidden heap symbols, and verifies exact size-class selection across every size from 1 to 65,537 plus SIZE_MAX boundaries. `make extended` adds boundary, overflow, mapping-failure, cross-thread and reclamation cases. `make stress` adds 40-thread cross-owner handoff/realloc, sparse objects pinning slabs, and 128 large-object churn/failure cycles, and a large shrink that releases tail pages and preserves the prefix. `make demo` runs a short functional demonstration. To link a client: `cc -Iinclude client.c build/libmemctl.a -pthread -o client`.
 
 The following checks also passed on the development Linux host; its tracing setup required leak detection to be disabled for ASan/UBSan:
 
@@ -27,7 +27,7 @@ T.kartheek independently passed the public, extended and stress suites under ASa
 
 ## Design
 
-Forty size classes cover payloads up to 32 KiB. The default allocator uses eight mutex-protected shards and slabs with at least eight slots or 16 KiB. Cross-thread frees lock the allocation's original slab owner. Completely empty slabs can be reused across classes, subject to a 256 KiB budget per shard (2 MiB total). Larger allocations receive dedicated mappings and are unmapped when freed. All returned pointers satisfy `max_align_t` on the tested Linux x86_64 target. Arithmetic is checked, `calloc` zeroes requested bytes, and failed `realloc` preserves its original allocation.
+Forty size classes cover payloads up to 32 KiB. The default allocator uses eight mutex-protected shards and slabs with at least eight slots or 12 KiB. Cross-thread frees lock the allocation's original slab owner. Completely empty slabs can be reused across classes, subject to a 256 KiB budget per shard (2 MiB total). Larger allocations receive dedicated mappings and are unmapped when freed. All returned pointers satisfy `max_align_t` on the tested Linux x86_64 target. Arithmetic is checked, `calloc` zeroes requested bytes, and failed `realloc` preserves its original allocation.
 
 Read [architecture](docs/ARCHITECTURE.md) and the [requirement matrix](docs/REQUIREMENTS.md) for invariants, limitations and evidence. The official public header, test runner and reference baseline are retained for reproducibility and attributed in the provenance note.
 

@@ -35,3 +35,28 @@ Changing only the shard count under the fixed cache bound helped tiny64 but shar
 `scripts/tune_empty.py` compared the existing first suitable empty slab with smallest suitable (best fit) across 150 shuffled fresh runs, five repeats per case. Best fit reduced eight-thread mixed/realloc/calloc median throughput to **0.52x/0.64x/0.67x** of first fit; it was rejected. The experimental source is `reference/allocator_bestfit_trial.c` to reproduce this result. `scripts/tune_slots.py` compared eight, four and two minimum slots across 135 shuffled runs, three repeats per case. Four slots modestly helped eight-thread mixed (1.18x) but regressed eight-thread realloc (0.90x) and 32-thread mixed/realloc (0.81x/0.84x). Two slots was less consistent. The eight-slot default was retained. Raw samples and summaries for both policies are under `results/tuning/`.
 
 The new 40-thread cross-owner test, pinned-slab reclamation and 128 large-object/failure cycles passed with the default in ordinary, ASan/UBSan (leaks disabled on the development host) and TSan builds. The unchanged public suite, extended suite and three-seed soak also passed. Final logs are named `results/final_20261109_*.log`. The `SHARDS` and `MIN_SLOTS` compile-time defaults in `src/allocator.c` remain eight; experimental overrides are **not** the production configuration. The long large-object throughput gap is a concrete tradeoff of immediate reclamation and should be investigated against a space bound before a cache is introduced.
+
+## Slab sizing and large realloc shrink, 10 November 2026
+
+Compared with the allocator on `b7eadf1`, the candidate uses a 12 KiB minimum slab instead of 16 KiB. The eight-slot minimum and 2 MiB total empty-cache limit still apply. A large realloc that shrinks to half of capacity or less and stays above 32 KiB tries to return the unused whole tail pages. Successful trimming keeps the old address and prefix. If trimming fails, realloc uses the normal allocate-copy-free path, preserving the old allocation on failure.
+
+The final combined candidate was tested on x86_64 Linux 6.18.57 with GCC 14.2.0 at `-O2 -g`. The host exposes nine logical CPUs on an AMD EPYC 7763. Each row uses 11 alternating baseline/candidate pairs in fresh processes. Throughput changes are medians of paired ratios.
+
+| Workload | Candidate vs baseline | Candidate wins |
+|---|---:|---:|
+| Eight-thread mixed | +22.0% | 11/11 |
+| Eight-thread realloc | +29.6% | 11/11 |
+| Eight-thread tiny | -2.8% | 5/11 |
+| Single-thread mixed | +5.4% | 7/11 |
+| Eight-thread large mix | -0.7% | 5/11 |
+| Single-thread repeated large shrink | +90.7% | 11/11 |
+
+Raw pairs, workload IDs and step counts are in `results/tuning/slab_and_shrink_paired.jsonl`. For the standard traces, run `make build/bench_candidate` in each checkout, then run each binary as `./build/bench_candidate THREADS WORKLOAD STEPS` with the recorded parameters. Check that calls and checksums agree. For repeated large shrink, use the same `bench/large_shrink.c` from this revision to compile against each checkout's `build/libmemctl.a`:
+
+```sh
+cc -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -Iinclude \
+    /path/to/candidate/bench/large_shrink.c build/libmemctl.a -pthread -o build/large_shrink
+./build/large_shrink
+```
+
+A separate instrumented run of the eight-thread mixed trace measured 926 to 775 mmap calls and 6,944 to 6,684 KiB peak mapped memory, taking the medians of five 80,000-step runs per build. The eight-thread large trace measured 30,119 to 29,184 mmap calls and 52,800 to 53,368 KiB peak in five 8,000-step runs per build. Post-free retention stayed within 2 MiB in both comparisons. The stress suite also verifies that a large shrink returns tail pages without calling mmap, preserves the requested prefix, and releases the remaining mapping on free.

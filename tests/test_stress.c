@@ -116,11 +116,37 @@ static void check_large_churn_and_failure(void)
     (void)puts("PASS 128 large-object churn/failure cycles with immediate reclamation");
 }
 
+static void check_large_shrink(void)
+{
+    const size_t original_size = 256U * 1024U + 137U;
+    const size_t resized_size = 64U * 1024U + 37U;
+    const size_t before = atomic_load(&vm_current);
+    unsigned char *ptr = my_malloc(original_size);
+    unsigned char *resized;
+    size_t live, maps, i;
+
+    REQUIRE(ptr != NULL);
+    (void)memset(ptr, 0x6b, resized_size);
+    live = atomic_load(&vm_current);
+    maps = atomic_load(&vm_maps);
+    atomic_store(&vm_fail, 1);
+    resized = my_realloc(ptr, resized_size);
+    atomic_store(&vm_fail, 0);
+    REQUIRE(resized == ptr);
+    REQUIRE(atomic_load(&vm_maps) == maps);
+    REQUIRE(atomic_load(&vm_current) < live);
+    for (i = 0; i < resized_size; ++i) REQUIRE(resized[i] == 0x6b);
+    my_free(resized);
+    REQUIRE(atomic_load(&vm_current) == before);
+    (void)puts("PASS large shrink preserves the prefix and releases tail pages");
+}
+
 int main(void)
 {
     check_handoff();
     check_pinned_slabs();
     check_large_churn_and_failure();
+    check_large_shrink();
     (void)puts("ALL STRESS TESTS PASSED");
     return 0;
 }

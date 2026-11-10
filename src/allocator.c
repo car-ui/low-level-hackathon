@@ -19,7 +19,7 @@
 #define CLASS_COUNT 40U
 #define MAX_SLAB_PAYLOAD (32U * 1024U)
 #ifndef SLAB_TARGET
-#define SLAB_TARGET (16U * 1024U)
+#define SLAB_TARGET (12U * 1024U)
 #endif
 #ifndef EMPTY_BUDGET
 #define EMPTY_BUDGET (256U * 1024U)
@@ -319,6 +319,24 @@ void *my_realloc(void *ptr, size_t size)
     if (size <= capacity && size > capacity / 2U) {
         header->requested = size;
         return ptr;
+    }
+    if (header->owner == NULL && size > MAX_SLAB_PAYLOAD &&
+        size < header->requested) {
+        large_header *mapping = (large_header *)ptr - 1;
+        const size_t old_bytes = mapping->mapping_bytes;
+        const int saved_errno = errno;
+        size_t new_bytes;
+        /* Keep the prefix mapped and return only the unused whole pages. */
+        if (round_mapping(sizeof(large_header) + size, &new_bytes) &&
+            new_bytes < old_bytes &&
+            munmap((unsigned char *)mapping + new_bytes,
+                   old_bytes - new_bytes) == 0) {
+            mapping->mapping_bytes = new_bytes;
+            header->requested = size;
+            errno = saved_errno;
+            return ptr;
+        }
+        errno = saved_errno;
     }
     replacement = my_malloc(size);
     if (replacement == NULL) return NULL;
