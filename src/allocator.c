@@ -285,7 +285,11 @@ void my_free(void *ptr)
         unlink_slab(owner, region);
         if (region->mapping_bytes > EMPTY_BUDGET - owner->cached_empty_bytes) {
             const size_t bytes = region->mapping_bytes;
+            /* The empty slab is detached and cannot be acquired again. */
+            (void)pthread_mutex_unlock(&owner->lock);
             (void)munmap(region, bytes);
+            errno = saved_errno;
+            return;
         } else {
             owner->cached_empty_bytes += region->mapping_bytes;
             region->next = owner->empty_head;
