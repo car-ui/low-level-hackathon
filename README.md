@@ -23,7 +23,7 @@ Compared with commit `c5a4b3d`, the large traces improved 10–13%. Mixed throug
 
 ## Build and test
 
-Install a C compiler, GNU Make and Python 3. Run the following commands **one at a time from the repository root**. For a recorded demo, wait for each command to finish, point to the indicated output, then say the accompanying sentence before running the next command. The first six steps build and demonstrate the allocator; the last step produces fresh benchmark metrics.
+Install a C compiler, GNU Make and Python 3. Run the following commands **one at a time from the repository root**. The first six steps build and test the allocator; the last step produces fresh benchmark metrics.
 
 1. Remove old build output:
 
@@ -31,7 +31,7 @@ Install a C compiler, GNU Make and Python 3. Run the following commands **one at
    make clean
    ```
 
-   **Point to:** `rm -rf build`. **Say:** “This removes previous compiled files so the demonstration starts with a fresh build.”
+   Deletes the `build` directory and its previous compiled files.
 
 2. Compile the allocator library and public test runner:
 
@@ -39,7 +39,7 @@ Install a C compiler, GNU Make and Python 3. Run the following commands **one at
    make all
    ```
 
-   **Point to:** `build/libmemctl.a` in the compiler output. **Say:** “The C allocator compiled successfully into a static library that other programs can link.”
+   Compiles the allocator into the static library `build/libmemctl.a` and builds the public test runner.
 
 3. Run the public and size-class checks:
 
@@ -47,7 +47,7 @@ Install a C compiler, GNU Make and Python 3. Run the following commands **one at
    make check
    ```
 
-   **Point to:** `Allocator symbol check passed`, `Summary: 6 passed, 0 failed`, and the final size-class PASS line. **Say:** “The allocator does not call forbidden heap functions, all six public test groups pass, and size selection passes its boundary checks.”
+   Checks allocator symbols, runs the six public test groups, and verifies size-class selection at allocation boundaries.
 
 4. Run additional correctness and reclamation tests:
 
@@ -55,7 +55,7 @@ Install a C compiler, GNU Make and Python 3. Run the following commands **one at
    make extended
    ```
 
-   **Point to:** the cross-thread PASS lines, `retained` below `bound`, and `ALL EXTENDED TESTS PASSED`. **Say:** “These tests cover mapping failures, cross-thread ownership, and memory reclamation. Retained memory stays below the stated two-megabyte bound.”
+   Tests mapping failures, cross-thread allocation ownership, and memory reclamation against the 2 MiB retention bound.
 
 5. Run concurrency and large-allocation stress tests:
 
@@ -63,7 +63,7 @@ Install a C compiler, GNU Make and Python 3. Run the following commands **one at
    make stress
    ```
 
-   **Point to:** the 40-thread handoff and large-cache/realloc PASS lines, then `ALL STRESS TESTS PASSED`. **Say:** “Stress tests verify concurrent handoff, reuse and resizing of large allocations, and allocator use after fork.”
+   Tests concurrent handoff, large-allocation reuse and resizing, and allocator use after `fork`.
 
 6. Run the functional demonstration:
 
@@ -71,7 +71,7 @@ Install a C compiler, GNU Make and Python 3. Run the following commands **one at
    make demo
    ```
 
-   **Point to:** the `calloc:` line while saying “Calloc returns zeroed memory”; the `realloc:` line while saying “Realloc grows an allocation while preserving its original data”; then point to `Demo passed`. The demo also checks overflow handling and zero-size allocation.
+   Runs a small program that checks zeroed `calloc` memory, `realloc` data preservation, overflow handling, and zero-size allocation.
 
 7. Reproduce the benchmark comparison:
 
@@ -79,13 +79,13 @@ Install a C compiler, GNU Make and Python 3. Run the following commands **one at
    python3 scripts/review_benchmark.py --base c5a4b3d /tmp/cache_samples.json
    ```
 
-   **Point to:** the final `Median Mops/s` table. **Say:** “This compares the earlier revision, the current source, and glibc on identical traces. It uses seven fresh runs per case and checks that calls and checksums match. These are measured results on this machine, not an official score.” The script may take several minutes and writes raw samples to `/tmp/cache_samples.json`; for a short video, trim the waiting time while keeping the command and final output visible. The script labels the current source `review`.
+   Compares commit `c5a4b3d`, the current source, and glibc on identical traces. It uses seven fresh runs per case, verifies matching call counts and checksums, and prints a `Median Mops/s` table. It may take several minutes and writes raw samples to `/tmp/cache_samples.json`. The script labels the current source `review`.
 
-Stop here for the short build, test, benchmark, and functional demo. Read the actual benchmark numbers printed on your machine; do not substitute the saved WSL2 numbers above.
+Benchmark results depend on the machine and may differ from the saved WSL2 numbers above.
 
 ### Optional deeper validation
 
-The commands below are additional checks, not part of the short demo sequence:
+The commands below provide additional validation:
 
 ```sh
 ASAN_OPTIONS=detect_leaks=1 make sanitize
