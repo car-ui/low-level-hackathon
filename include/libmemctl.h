@@ -19,6 +19,10 @@ void my_free(void *ptr);
 void *my_realloc(void *ptr, size_t size);
 void *my_calloc(size_t nmemb, size_t size);
 
+/* Report capacity for a live libmemctl allocation, or zero for NULL.
+ * For diagnostics; realloc guarantees preservation only of requested bytes. */
+size_t my_malloc_usable_size(const void *ptr);
+
 #ifdef __cplusplus
 }
 #endif

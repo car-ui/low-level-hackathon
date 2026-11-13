@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #define REQUIRE(condition) do { if (!(condition)) { \
     (void)fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #condition); exit(1); \
@@ -100,7 +102,7 @@ static void check_large_churn_and_failure(void)
 {
     size_t round;
     for (round = 0; round < 128U; ++round) {
-        const size_t size = 32769U + round * 8191U;
+        const size_t size = 256U * 1024U + 1U + round * 8191U;
         const size_t before = atomic_load(&vm_current);
         unsigned char *ptr = my_calloc(1U, size);
         REQUIRE(ptr != NULL && ptr[0] == 0 && ptr[size - 1U] == 0);
@@ -119,9 +121,10 @@ static void check_large_churn_and_failure(void)
 static void check_large_shrink(void)
 {
     const size_t original_size = 256U * 1024U + 137U;
-    const size_t resized_size = 64U * 1024U + 37U;
+    const size_t resized_size = 257U * 1024U + 37U;
+    const size_t large_size = 1024U * 1024U + original_size;
     const size_t before = atomic_load(&vm_current);
-    unsigned char *ptr = my_malloc(original_size);
+    unsigned char *ptr = my_malloc(large_size);
     unsigned char *resized;
     size_t live, maps, i;
 
@@ -141,12 +144,106 @@ static void check_large_shrink(void)
     (void)puts("PASS large shrink preserves the prefix and releases tail pages");
 }
 
+static void check_large_cache_and_growth(void)
+{
+    const size_t size = 128U * 1024U;
+    const size_t grown = 512U * 1024U;
+    const size_t before = atomic_load(&vm_current);
+    unsigned char *ptr = my_malloc(size), *other;
+    size_t maps, remaps, i, retained, capacity;
+    REQUIRE(ptr != NULL);
+    other = my_malloc(size);
+    REQUIRE(other != NULL);
+    REQUIRE(my_malloc_usable_size(NULL) == 0);
+    capacity = my_malloc_usable_size(ptr);
+    REQUIRE(capacity >= size && capacity - size < (size_t)sysconf(_SC_PAGESIZE));
+    (void)memset(ptr, 0xa5, size);
+    errno = EDOM;
+    my_free(ptr);
+    REQUIRE(errno == EDOM);
+    my_free(other);
+    retained = atomic_load(&vm_current);
+    REQUIRE(retained > before && retained - before <= 256U * 1024U);
+    maps = atomic_load(&vm_maps);
+    atomic_store(&vm_fail, 1);
+    ptr = my_calloc(size, 1);
+    atomic_store(&vm_fail, 0);
+    REQUIRE(ptr != NULL && atomic_load(&vm_maps) == maps);
+    for (i = 0; i < size; ++i) REQUIRE(ptr[i] == 0);
+
+    (void)memset(ptr, 0x67, size);
+    remaps = atomic_load(&vm_remaps);
+    errno = EDOM;
+    ptr = my_realloc(ptr, grown);
+    REQUIRE(ptr != NULL && errno == EDOM && my_malloc_usable_size(ptr) >= grown);
+    REQUIRE(atomic_load(&vm_remaps) == remaps + 1 && atomic_load(&vm_maps) == maps);
+    for (i = 0; i < size; ++i) REQUIRE(ptr[i] == 0x67);
+
+    ptr[grown - 1] = 0x73;
+    atomic_store(&vm_remap_fail, 1);
+    ptr = my_realloc(ptr, grown * 2U);
+    atomic_store(&vm_remap_fail, 0);
+    REQUIRE(ptr != NULL && atomic_load(&vm_remaps) == remaps + 1);
+    REQUIRE(atomic_load(&vm_maps) == maps + 1 && ptr[grown - 1] == 0x73);
+    for (i = 0; i < size; ++i) REQUIRE(ptr[i] == 0x67);
+    my_free(ptr);
+    REQUIRE(atomic_load(&vm_current) == before);
+    (void)puts("PASS bounded large-cache reuse/zeroing, usable size, mremap and fallback");
+}
+
+static atomic_int fork_worker_running;
+static atomic_int fork_worker_stop;
+
+static void *fork_worker(void *arg)
+{
+    (void)arg;
+    do {
+        void *ptr = my_malloc(4096);
+        REQUIRE(ptr != NULL);
+        my_free(ptr);
+        atomic_store(&fork_worker_running, 1);
+    } while (!atomic_load(&fork_worker_stop));
+    return NULL;
+}
+
+static void check_fork(void)
+{
+    pthread_t worker;
+    unsigned char *inherited = my_malloc(37);
+    int status;
+    REQUIRE(inherited != NULL && my_malloc_usable_size(inherited) == 48U);
+    inherited[0] = 0xb6;
+    REQUIRE(pthread_create(&worker, NULL, fork_worker, NULL) == 0);
+    while (!atomic_load(&fork_worker_running)) { }
+    for (unsigned int i = 0; i < 8; ++i) {
+        const pid_t child = fork();
+        REQUIRE(child >= 0);
+        if (child == 0) {
+            unsigned char *ptr;
+            (void)alarm(5);
+            ptr = my_realloc(inherited, 128);
+            if (ptr == NULL || ptr[0] != 0xb6) _exit(1);
+            my_free(ptr);
+            _exit(0);
+        }
+        REQUIRE(waitpid(child, &status, 0) == child);
+        REQUIRE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        REQUIRE(inherited[0] == 0xb6);
+    }
+    atomic_store(&fork_worker_stop, 1);
+    REQUIRE(pthread_join(worker, NULL) == 0);
+    my_free(inherited);
+    (void)puts("PASS child allocator use after fork while a worker allocates");
+}
+
 int main(void)
 {
+    check_large_cache_and_growth();
     check_handoff();
     check_pinned_slabs();
     check_large_churn_and_failure();
     check_large_shrink();
+    check_fork();
     (void)puts("ALL STRESS TESTS PASSED");
     return 0;
 }

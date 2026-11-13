@@ -9,10 +9,10 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-/* Eight stable shard owners; cross-thread frees lock the original owner.
+/* Eight stable shards; cross-thread frees lock the allocation's owner.
  * No thread-local slab pointers, so thread exit cannot strand ownership.
  * Only nonempty slabs with spare capacity are linked in available[].
- * Empty mappings form a bounded pool reusable across size classes. */
+ * Empty slabs and cached large mappings share a per-shard budget. */
 #ifndef SHARDS
 #define SHARDS 8U
 #endif
@@ -28,6 +28,7 @@
 #define MIN_SLOTS 8U
 #endif
 #define ALIGNMENT _Alignof(max_align_t)
+#define CACHE_LINE 64U
 
 struct slab;
 struct shard;
@@ -39,6 +40,7 @@ typedef struct block_header {
 /* The common header immediately precedes both kinds of payload. */
 typedef struct large_header {
     size_t mapping_bytes;
+    struct shard *shard_owner;
     block_header block;
 } large_header;
 
@@ -56,10 +58,11 @@ typedef struct slab {
 } slab;
 
 typedef struct shard {
-    pthread_mutex_t lock;
+    _Alignas(CACHE_LINE) pthread_mutex_t lock;
     slab *available[CLASS_COUNT];
     slab *empty_head;
-    size_t cached_empty_bytes;
+    large_header *cached_large;
+    size_t retained_bytes;
 } shard;
 
 static const size_t capacities[CLASS_COUNT] = {
@@ -73,19 +76,48 @@ static shard shards[SHARDS];
 static pthread_once_t init_once = PTHREAD_ONCE_INIT;
 static atomic_uint next_shard = ATOMIC_VAR_INIT(0);
 static _Thread_local unsigned int local_shard = UINT_MAX;
+static _Thread_local unsigned int small_allocations;
 static size_t page_bytes;
 static int initialization_error;
+static _Thread_local int fork_locked;
 
 _Static_assert(sizeof(block_header) % ALIGNMENT == 0, "header alignment");
 _Static_assert(offsetof(large_header, block) + sizeof(block_header) ==
                sizeof(large_header), "common header must end at large payload");
 _Static_assert(sizeof(slab) % ALIGNMENT == 0, "slab alignment");
+_Static_assert(sizeof(shard) % CACHE_LINE == 0, "shards must not share cache lines");
 _Static_assert(16 % ALIGNMENT == 0, "size classes require max_align_t <= 16 dividing 16");
+
+static int ready(void);
+
+static void fork_prepare(void)
+{
+    const int saved_errno = errno;
+    fork_locked = ready();
+    if (fork_locked) {
+        for (unsigned int i = 0; i < SHARDS; ++i)
+            (void)pthread_mutex_lock(&shards[i].lock);
+    }
+    errno = saved_errno;
+}
+
+static void fork_release(void)
+{
+    if (!fork_locked) return;
+    for (unsigned int i = SHARDS; i != 0; --i)
+        (void)pthread_mutex_unlock(&shards[i - 1U].lock);
+    fork_locked = 0;
+}
 
 static void initialize(void)
 {
     unsigned int index;
-    const long value = sysconf(_SC_PAGESIZE);
+    long value;
+    /* Register before mutating shard state. Prepare waits for this once
+     * routine if another thread forks during initialization. */
+    initialization_error = pthread_atfork(fork_prepare, fork_release, fork_release);
+    if (initialization_error != 0) return;
+    value = sysconf(_SC_PAGESIZE);
     if (value <= 0 || (size_t)value % ALIGNMENT != 0) {
         initialization_error = EINVAL;
         return;
@@ -171,7 +203,7 @@ static slab *new_slab(shard *owner, unsigned int index)
         region = *link;
         *link = region->next;
         bytes = region->mapping_bytes;
-        owner->cached_empty_bytes -= bytes;
+        owner->retained_bytes -= bytes;
         /* No live objects remain; all old headers/free links can be discarded. */
         region->free_head = NULL;
         region->next_unused = 0;
@@ -193,25 +225,45 @@ static slab *new_slab(shard *owner, unsigned int index)
     return region;
 }
 
-static void *large_allocate(size_t requested)
+static int large_mapping_size(size_t requested, size_t *bytes)
 {
-    size_t bytes;
-    large_header *header;
     if (requested > SIZE_MAX - sizeof(large_header)) {
         errno = ENOMEM;
-        return NULL;
+        return 0;
     }
-    if (!round_mapping(sizeof(large_header) + requested, &bytes)) return NULL;
-    header = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
-                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (header == MAP_FAILED) return NULL;
+    return round_mapping(sizeof(large_header) + requested, bytes);
+}
+
+static void *large_allocate(shard *owner, size_t requested, int zero)
+{
+    size_t bytes;
+    large_header *header = NULL;
+    if (!large_mapping_size(requested, &bytes)) return NULL;
+    if (bytes <= EMPTY_BUDGET) {
+        const int result = pthread_mutex_lock(&owner->lock);
+        if (result != 0) { errno = result; return NULL; }
+        if (owner->cached_large != NULL && owner->cached_large->mapping_bytes == bytes) {
+            header = owner->cached_large;
+            owner->cached_large = NULL;
+            owner->retained_bytes -= bytes;
+        }
+        (void)pthread_mutex_unlock(&owner->lock);
+    }
+    if (header == NULL) {
+        header = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (header == MAP_FAILED) return NULL;
+    } else if (zero) {
+        (void)memset(header + 1, 0, requested);
+    }
     header->mapping_bytes = bytes;
+    header->shard_owner = owner;
     header->block.owner = NULL;
     header->block.requested = requested;
     return header + 1;
 }
 
-void *my_malloc(size_t size)
+static void *allocate(size_t size, int zero)
 {
     const size_t payload = size == 0U ? 1U : size;
     unsigned int index;
@@ -224,13 +276,31 @@ void *my_malloc(size_t size)
      * new threads still synchronize through pthread_once before reading it. */
     if (local_shard == UINT_MAX && !ready()) return NULL;
     index = size_class(payload);
-    if (index == CLASS_COUNT) return large_allocate(payload);
     if (local_shard == UINT_MAX) {
         local_shard = atomic_fetch_add_explicit(&next_shard, 1U,
                                                memory_order_relaxed) % SHARDS;
     }
     owner = &shards[local_shard];
-    lock_result = pthread_mutex_lock(&owner->lock);
+    if (index == CLASS_COUNT) return large_allocate(owner, payload, zero);
+    /* Sample contention rather than probing a second mutex on every call.
+     * Under sustained load, extra probes can slow down both shards. */
+    lock_result = (++small_allocations & 15U) == 0U
+                  ? pthread_mutex_trylock(&owner->lock)
+                  : pthread_mutex_lock(&owner->lock);
+    if (lock_result == EBUSY) {
+        /* Use a neighbor only if it already has space for this class.
+         * Keep the home shard stable and never hold two locks here. */
+        shard *neighbor = &shards[(local_shard + 1U) % SHARDS];
+        if (SHARDS > 1U && pthread_mutex_trylock(&neighbor->lock) == 0) {
+            if (neighbor->available[index] != NULL) {
+                owner = neighbor;
+                lock_result = 0;
+            } else {
+                (void)pthread_mutex_unlock(&neighbor->lock);
+            }
+        }
+        if (lock_result != 0) lock_result = pthread_mutex_lock(&owner->lock);
+    }
     if (lock_result != 0) { errno = lock_result; return NULL; }
     region = owner->available[index];
     if (region == NULL) {
@@ -257,7 +327,13 @@ void *my_malloc(size_t size)
     ++region->live;
     if (region->live == region->slots) unlink_slab(owner, region);
     (void)pthread_mutex_unlock(&owner->lock);
+    if (zero && size != 0U) (void)memset(header + 1, 0, size);
     return header + 1;
+}
+
+void *my_malloc(size_t size)
+{
+    return allocate(size, 0);
 }
 
 void my_free(void *ptr)
@@ -271,7 +347,20 @@ void my_free(void *ptr)
     region = header->owner;
     if (region == NULL) {
         large_header *mapping = (large_header *)ptr - 1;
-        (void)munmap(mapping, mapping->mapping_bytes);
+        const size_t bytes = mapping->mapping_bytes;
+        owner = mapping->shard_owner;
+        if (bytes <= EMPTY_BUDGET) {
+            (void)pthread_mutex_lock(&owner->lock);
+            if (owner->cached_large == NULL && bytes <= EMPTY_BUDGET - owner->retained_bytes) {
+                owner->cached_large = mapping;
+                owner->retained_bytes += bytes;
+                (void)pthread_mutex_unlock(&owner->lock);
+                errno = saved_errno;
+                return;
+            }
+            (void)pthread_mutex_unlock(&owner->lock);
+        }
+        (void)munmap(mapping, bytes);
         errno = saved_errno;
         return;
     }
@@ -283,7 +372,7 @@ void my_free(void *ptr)
     --region->live;
     if (region->live == 0U) {
         unlink_slab(owner, region);
-        if (region->mapping_bytes > EMPTY_BUDGET - owner->cached_empty_bytes) {
+        if (region->mapping_bytes > EMPTY_BUDGET - owner->retained_bytes) {
             const size_t bytes = region->mapping_bytes;
             /* The empty slab is detached and cannot be acquired again. */
             (void)pthread_mutex_unlock(&owner->lock);
@@ -291,13 +380,24 @@ void my_free(void *ptr)
             errno = saved_errno;
             return;
         } else {
-            owner->cached_empty_bytes += region->mapping_bytes;
+            owner->retained_bytes += region->mapping_bytes;
             region->next = owner->empty_head;
             owner->empty_head = region;
         }
     }
     (void)pthread_mutex_unlock(&owner->lock);
     errno = saved_errno;
+}
+
+size_t my_malloc_usable_size(const void *ptr)
+{
+    const block_header *header;
+    if (ptr == NULL) return 0;
+    header = (const block_header *)ptr - 1;
+    if (header->owner != NULL) {
+        return header->owner->stride - sizeof(block_header);
+    }
+    return ((const large_header *)ptr - 1)->mapping_bytes - sizeof(large_header);
 }
 
 void *my_realloc(void *ptr, size_t size)
@@ -308,17 +408,25 @@ void *my_realloc(void *ptr, size_t size)
     if (ptr == NULL) return my_malloc(size);
     if (size == 0U) { my_free(ptr); return NULL; }
     header = (block_header *)ptr - 1;
-    if (header->owner != NULL) {
-        capacity = header->owner->stride - sizeof(block_header);
-    } else {
-        const large_header *mapping = (const large_header *)ptr - 1;
-        capacity = mapping->mapping_bytes - sizeof(large_header);
-    }
+    capacity = my_malloc_usable_size(ptr);
     /* Keep moderate resizes in place. Move substantial shrinks to avoid
      * pinning a large region for a tiny object. Object ownership is caller-synchronized. */
     if (size <= capacity && size > capacity / 2U) {
         header->requested = size;
         return ptr;
+    }
+    if (header->owner == NULL && size > capacity) {
+        large_header *mapping = (large_header *)ptr - 1;
+        const int saved_errno = errno;
+        size_t bytes;
+        if (!large_mapping_size(size, &bytes)) return NULL;
+        mapping = mremap(mapping, mapping->mapping_bytes, bytes, MREMAP_MAYMOVE);
+        if (mapping != MAP_FAILED) {
+            mapping->mapping_bytes = bytes;
+            mapping->block.requested = size;
+            return mapping + 1;
+        }
+        errno = saved_errno;
     }
     if (header->owner == NULL && size > MAX_SLAB_PAYLOAD &&
         size < header->requested) {
@@ -348,18 +456,9 @@ void *my_realloc(void *ptr, size_t size)
 
 void *my_calloc(size_t nmemb, size_t size)
 {
-    size_t total;
-    void *ptr;
     if (size != 0U && nmemb > SIZE_MAX / size) {
         errno = ENOMEM;
         return NULL;
     }
-    total = nmemb * size;
-    ptr = my_malloc(total);
-    /* Large requests receive fresh anonymous mappings, already zero-filled.
-     * Slab payloads may contain bytes from previous users. */
-    if (ptr != NULL && total != 0U && total <= MAX_SLAB_PAYLOAD) {
-        (void)memset(ptr, 0, total);
-    }
-    return ptr;
+    return allocate(nmemb * size, 1);
 }

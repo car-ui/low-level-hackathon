@@ -58,7 +58,7 @@ clean:
 
 
 EXT_BIN = $(BUILD_DIR)/test_extended
-WRAPS = -Wl,--wrap=mmap -Wl,--wrap=munmap
+WRAPS = -Wl,--wrap=mmap -Wl,--wrap=munmap -Wl,--wrap=mremap
 $(EXT_BIN): tests/test_extended.c tests/vm_probe.c tests/vm_probe.h $(LIB)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNINGS) tests/test_extended.c tests/vm_probe.c $(LIB) $(LDLIBS) $(WRAPS) -o $@
 

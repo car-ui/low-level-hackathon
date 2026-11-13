@@ -45,7 +45,7 @@ static void trace(context *state, size_t steps)
     for (i = 0; i < steps; ++i) {
         const uint32_t random_value = random_next(&state->seed);
         const size_t slot = random_value % SLOTS;
-        const size_t size = workload == 0U ? 64U :
+        const size_t size = workload == 0U ? 64U : workload == 5U ? 131072U :
                             1U + random_next(&state->seed) %
                             (workload == 4U ? 131072U : 8192U);
         unsigned char *ptr = slots[slot];
@@ -100,7 +100,7 @@ int main(int argc, char **argv)
     if (argc != 3 && argc != 4) return 2;
     count = strtoul(argv[1], NULL, 10); workload = (unsigned int)strtoul(argv[2], NULL, 10);
     if (argc == 4) measured_steps = strtoul(argv[3], NULL, 10);
-    if (count == 0 || count > 32 || workload > 4 ||
+    if (count == 0 || count > 32 || workload > 5 ||
         measured_steps == 0 || measured_steps > 1000000U) return 2;
     if (pthread_barrier_init(&start_barrier, NULL, (unsigned int)count + 1U) != 0) return 3;
     for (i = 0; i < count; ++i) {

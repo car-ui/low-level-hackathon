@@ -1,4 +1,19 @@
-# User-run WSL validation, 9 November 2026
+# WSL validation
+
+## Final review revision (13 November 2026)
+
+Validated under WSL2 Ubuntu, Linux 6.18.58.1, x86_64, GCC 15.2.0.
+
+| Command | Result |
+|---|---|
+| `make clean && make check extended stress demo` | Passed; no clock-skew warning |
+| `ASAN_OPTIONS=detect_leaks=1 make sanitize` | Passed; no ASan, UBSan or leak diagnostic |
+| `make thread-sanitize` | Passed; no race diagnostic |
+| `python3 scripts/soak.py` | Passed all three seeds (5.4 million operations total) |
+
+The public runner was unchanged. The new stress cases cover reuse of a dirty large mapping by calloc, mapping accounting and the shared 2 MiB retention cap, successful mremap, forced fallback and failure, usable size, and child allocator use while another thread was allocating at fork. The extended suite reported 1,949,696 retained bytes after all allocations were freed (limit: 2,097,152). LeakSanitizer does not track individual blocks inside a custom mapping; the VM wrappers provide separate mapping-level evidence.
+
+## User-run validation, 9 November 2026
 
 Team member T.kartheek pasted terminal output from WSL Ubuntu at `/mnt/c/Users/Kartheek/Downloads/lowfps-test/libmemctl`. The assistant did not directly access this machine or its shell environment.
 
