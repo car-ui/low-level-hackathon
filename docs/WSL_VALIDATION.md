@@ -15,7 +15,7 @@ The public runner was unchanged. The stress cases cover reuse of a larger dirty 
 
 ## User-run validation, 9 November 2026
 
-Team member T.kartheek pasted terminal output from WSL Ubuntu at `/mnt/c/Users/Kartheek/Downloads/lowfps-test/libmemctl`. The assistant did not directly access this machine or its shell environment.
+Team member T.kartheek supplied terminal output from WSL Ubuntu at `/mnt/c/Users/Kartheek/Downloads/lowfps-test/libmemctl`.
 
 `make sanitize` freshly compiled the allocator and both runners with AddressSanitizer and UndefinedBehaviorSanitizer. The forbidden-symbol check passed. All six organizer test groups passed (0 failed), including 160,000 threaded operations. All extended tests passed: distinct zero allocations, sizes 1..65537, forced mapping failures, 16-thread cross-owner realloc/free, 64 thread-exit cycles and reclamation. Reported retained memory was 2,043,904 bytes (bound 2,097,152), peak 87,719,936 bytes, mmap 34,520 and munmap 34,490. No sanitizer or leak report appeared in the pasted output. The command did not explicitly disable leak detection, but the shell's ASAN_OPTIONS was not captured, so leak detection being enabled is not independently confirmed.
 
