@@ -242,9 +242,13 @@ static void *large_allocate(shard *owner, size_t requested, int zero)
     if (bytes <= EMPTY_BUDGET) {
         const int result = pthread_mutex_lock(&owner->lock);
         if (result != 0) { errno = result; return NULL; }
-        if (owner->cached_large != NULL && owner->cached_large->mapping_bytes == bytes) {
+        /* Prefer reuse over a VM syscall, while limiting extra mapping slack. */
+        if (owner->cached_large != NULL &&
+            owner->cached_large->mapping_bytes >= bytes &&
+            owner->cached_large->mapping_bytes - bytes <= bytes / 4U) {
             header = owner->cached_large;
             owner->cached_large = NULL;
+            bytes = header->mapping_bytes;
             owner->retained_bytes -= bytes;
         }
         (void)pthread_mutex_unlock(&owner->lock);
@@ -341,27 +345,32 @@ void my_free(void *ptr)
     block_header *header;
     slab *region;
     shard *owner;
-    const int saved_errno = errno;
     if (ptr == NULL) return;
     header = (block_header *)ptr - 1;
     region = header->owner;
     if (region == NULL) {
         large_header *mapping = (large_header *)ptr - 1;
+        large_header *discard = mapping;
         const size_t bytes = mapping->mapping_bytes;
         owner = mapping->shard_owner;
         if (bytes <= EMPTY_BUDGET) {
             (void)pthread_mutex_lock(&owner->lock);
-            if (owner->cached_large == NULL && bytes <= EMPTY_BUDGET - owner->retained_bytes) {
+            large_header *previous = owner->cached_large;
+            const size_t previous_bytes = previous == NULL ? 0U : previous->mapping_bytes;
+            /* Replace a stale size when the new mapping fits the shared budget. */
+            if (bytes != previous_bytes &&
+                bytes <= EMPTY_BUDGET - (owner->retained_bytes - previous_bytes)) {
                 owner->cached_large = mapping;
-                owner->retained_bytes += bytes;
-                (void)pthread_mutex_unlock(&owner->lock);
-                errno = saved_errno;
-                return;
+                owner->retained_bytes = owner->retained_bytes - previous_bytes + bytes;
+                discard = previous;
             }
             (void)pthread_mutex_unlock(&owner->lock);
         }
-        (void)munmap(mapping, bytes);
-        errno = saved_errno;
+        if (discard != NULL) {
+            const int saved_errno = errno;
+            (void)munmap(discard, discard->mapping_bytes);
+            errno = saved_errno;
+        }
         return;
     }
     owner = region->shard_owner;
@@ -374,6 +383,7 @@ void my_free(void *ptr)
         unlink_slab(owner, region);
         if (region->mapping_bytes > EMPTY_BUDGET - owner->retained_bytes) {
             const size_t bytes = region->mapping_bytes;
+            const int saved_errno = errno;
             /* The empty slab is detached and cannot be acquired again. */
             (void)pthread_mutex_unlock(&owner->lock);
             (void)munmap(region, bytes);
@@ -386,7 +396,6 @@ void my_free(void *ptr)
         }
     }
     (void)pthread_mutex_unlock(&owner->lock);
-    errno = saved_errno;
 }
 
 size_t my_malloc_usable_size(const void *ptr)

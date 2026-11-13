@@ -11,7 +11,7 @@ Validated under WSL2 Ubuntu, Linux 6.18.58.1, x86_64, GCC 15.2.0.
 | `make thread-sanitize` | Passed; no race diagnostic |
 | `python3 scripts/soak.py` | Passed all three seeds (5.4 million operations total) |
 
-The public runner was unchanged. The new stress cases cover reuse of a dirty large mapping by calloc, mapping accounting and the shared 2 MiB retention cap, successful mremap, forced fallback and failure, usable size, and child allocator use while another thread was allocating at fork. The extended suite reported 1,949,696 retained bytes after all allocations were freed (limit: 2,097,152). LeakSanitizer does not track individual blocks inside a custom mapping; the VM wrappers provide separate mapping-level evidence.
+The public runner was unchanged. The stress cases cover reuse of a larger dirty mapping by calloc, mapping accounting and the shared 2 MiB retention cap, successful mremap, forced fallback and failure, usable size, and child allocator use while another thread was allocating at fork. The extended suite reported 1,974,272 retained bytes after all allocations were freed (limit 2,097,152). LeakSanitizer does not track individual blocks inside a custom mapping. The VM wrappers provide separate mapping-level evidence.
 
 ## User-run validation, 9 November 2026
 

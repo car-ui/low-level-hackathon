@@ -11,15 +11,15 @@ C11 user-space allocator for the IIIT Bangalore Synergy '26 Low-Level Hackathon.
 
 Median throughput in million allocation API calls per second, measured on WSL2 Ubuntu. Each cell uses seven fresh processes with matching trace checksums.
 
-| Workload | Before review | Review revision | glibc |
+| Workload | Review revision | Current | glibc |
 |---|---:|---:|---:|
-| 1 thread, mixed sizes up to 8 KiB | 6.93 | 7.11 | 7.15 |
-| 8 threads, mixed sizes up to 8 KiB | 15.60 | 14.50 | 18.84 |
-| 32 threads, mixed sizes up to 8 KiB | 13.87 | 13.12 | 27.93 |
-| 8 threads, varying sizes up to 128 KiB with realloc | 0.037 | 0.054 | 0.929 |
-| 8 threads, repeated 128 KiB allocations | 0.021 | 0.031 | 0.583 |
+| 1 thread, mixed sizes up to 8 KiB | 8.12 | 7.61 | 8.28 |
+| 8 threads, mixed sizes up to 8 KiB | 15.60 | 15.79 | 20.28 |
+| 32 threads, mixed sizes up to 8 KiB | 13.50 | 14.17 | 33.54 |
+| 8 threads, varying sizes up to 128 KiB with realloc | 0.056 | 0.063 | 0.857 |
+| 8 threads, repeated 128 KiB allocations | 0.035 | 0.039 | 0.648 |
 
-The two large traces improved 48–52%. Mixed throughput rose 3% at one thread and fell 5–7% at eight and 32 threads. glibc still led all five traces. These are shared-host measurements with run-to-run variation. See the [raw samples](results/review_samples.json), or reproduce with `python3 scripts/review_benchmark.py /tmp/review_samples.json`.
+Compared with commit `c5a4b3d`, the large traces improved 10–13%. Mixed throughput rose 1% at eight threads and 5% at 32 threads, and fell 6% at one thread. glibc led all five traces. These are shared-host measurements with run-to-run variation. Reproduce with `python3 scripts/review_benchmark.py --base c5a4b3d /tmp/cache_samples.json`. [Current raw samples](results/large_cache_samples.json) · [Original review samples](results/review_samples.json)
 
 ## Build and test
 
@@ -44,7 +44,7 @@ See [WSL validation](docs/WSL_VALIDATION.md) for the test scope and custom-alloc
 
 ## Design
 
-Forty size classes cover payloads up to 32 KiB. Eight cache-line-aligned shards serve small allocations; a busy home shard can try one neighbor. Cross-thread frees lock the actual owner. Larger allocations use dedicated mappings, with exact page-size reuse where the shared retention budget permits. Large realloc growth tries `mremap` before falling back to allocate-copy-free. All returned pointers satisfy `max_align_t` on the tested Linux x86_64 target. Arithmetic is checked, `calloc` zeroes requested bytes, and failed `realloc` preserves its original allocation. The optional `my_malloc_usable_size` reports capacity for a live allocation, and Linux fork handlers synchronize shard metadata.
+Forty size classes cover payloads up to 32 KiB. Eight cache-line-aligned shards serve small allocations, and a busy home shard can try one neighbor. Cross-thread frees lock the actual owner. Larger allocations use dedicated mappings. The cache can reuse a mapping up to 25% larger than the required page-rounded size. Large realloc growth tries `mremap` before falling back to allocate-copy-free. All returned pointers satisfy `max_align_t` on the tested Linux x86_64 target. Arithmetic is checked, `calloc` zeroes requested bytes, and failed `realloc` preserves its original allocation. The optional `my_malloc_usable_size` reports capacity for a live allocation, and Linux fork handlers synchronize shard metadata.
 
 Read [architecture](docs/ARCHITECTURE.md) and the [requirement matrix](docs/REQUIREMENTS.md) for invariants, limitations and evidence. The organizer specification, header, public runner and baseline are attributed in the [provenance note](docs/PROVENANCE.md); this repository does not grant a license to those materials.
 

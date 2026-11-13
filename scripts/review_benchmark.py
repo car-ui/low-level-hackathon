@@ -27,7 +27,9 @@ def run(*args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="write raw samples to this JSON file")
+    parser.add_argument("--base", default=BASE, help="commit to compare against")
     args = parser.parse_args()
+    base = run("git", "rev-parse", args.base).strip()
     samples = []
     rng = random.Random(26)
     flags = ["cc", "-O2", "-D_GNU_SOURCE", "-std=c11", "-Iinclude", "-pthread",
@@ -35,7 +37,7 @@ def main():
     with tempfile.TemporaryDirectory() as work:
         work = Path(work)
         before = work / "before.c"
-        before.write_text(run("git", "show", f"{BASE}:src/allocator.c"))
+        before.write_text(run("git", "show", f"{base}:src/allocator.c"))
         builds = {"prior": [str(before)], "review": ["src/allocator.c"],
                   "libc": ["-DUSE_LIBC"]}
         for name, extra in builds.items():
@@ -55,7 +57,7 @@ def main():
                 samples.extend(rows)
 
     environment = {"kernel": platform.release(), "compiler": run("cc", "--version").splitlines()[0],
-                   "libc": platform.libc_ver(), "prior_commit": BASE}
+                   "libc": platform.libc_ver(), "prior_commit": base}
     args.output.write_text(json.dumps({"environment": environment, "samples": samples}, indent=2) + "\n")
     print("Median Mops/s: trace | prior | review | libc")
     for trace in TRACES:

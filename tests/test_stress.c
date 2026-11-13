@@ -147,6 +147,7 @@ static void check_large_shrink(void)
 static void check_large_cache_and_growth(void)
 {
     const size_t size = 128U * 1024U;
+    const size_t smaller = 120U * 1024U;
     const size_t grown = 512U * 1024U;
     const size_t before = atomic_load(&vm_current);
     unsigned char *ptr = my_malloc(size), *other;
@@ -166,18 +167,19 @@ static void check_large_cache_and_growth(void)
     REQUIRE(retained > before && retained - before <= 256U * 1024U);
     maps = atomic_load(&vm_maps);
     atomic_store(&vm_fail, 1);
-    ptr = my_calloc(size, 1);
+    ptr = my_calloc(smaller, 1);
     atomic_store(&vm_fail, 0);
     REQUIRE(ptr != NULL && atomic_load(&vm_maps) == maps);
-    for (i = 0; i < size; ++i) REQUIRE(ptr[i] == 0);
+    REQUIRE(my_malloc_usable_size(ptr) == capacity);
+    for (i = 0; i < smaller; ++i) REQUIRE(ptr[i] == 0);
 
-    (void)memset(ptr, 0x67, size);
+    (void)memset(ptr, 0x67, smaller);
     remaps = atomic_load(&vm_remaps);
     errno = EDOM;
     ptr = my_realloc(ptr, grown);
     REQUIRE(ptr != NULL && errno == EDOM && my_malloc_usable_size(ptr) >= grown);
     REQUIRE(atomic_load(&vm_remaps) == remaps + 1 && atomic_load(&vm_maps) == maps);
-    for (i = 0; i < size; ++i) REQUIRE(ptr[i] == 0x67);
+    for (i = 0; i < smaller; ++i) REQUIRE(ptr[i] == 0x67);
 
     ptr[grown - 1] = 0x73;
     atomic_store(&vm_remap_fail, 1);
@@ -185,7 +187,7 @@ static void check_large_cache_and_growth(void)
     atomic_store(&vm_remap_fail, 0);
     REQUIRE(ptr != NULL && atomic_load(&vm_remaps) == remaps + 1);
     REQUIRE(atomic_load(&vm_maps) == maps + 1 && ptr[grown - 1] == 0x73);
-    for (i = 0; i < size; ++i) REQUIRE(ptr[i] == 0x67);
+    for (i = 0; i < smaller; ++i) REQUIRE(ptr[i] == 0x67);
     my_free(ptr);
     REQUIRE(atomic_load(&vm_current) == before);
     (void)puts("PASS bounded large-cache reuse/zeroing, usable size, mremap and fallback");
